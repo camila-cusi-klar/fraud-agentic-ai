@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# Standard library imports for JSON handling, subprocess isolation, and temp file management.
 import json
 import subprocess
 import sys
@@ -10,8 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# Pydantic models define structured outputs from the analyst agent.
 from pydantic import BaseModel, Field
 
+# Agents SDK imports are optional at import time so notebooks can load this module even
+# before the package is installed. Runtime checks enforce installation when needed.
 try:
     from agents import Agent, RunContextWrapper, Runner, function_tool
 except ImportError:  # pragma: no cover - handled by _require_agents at runtime
@@ -31,22 +35,33 @@ class TransactionContext:
 
     data_path: str
     columns: list[str]
+    # Python executable used to run sandboxed analysis code in a subprocess.
     python_executable: str = sys.executable
+    # Hard timeout for each tool execution in seconds.
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    # Maximum characters returned from tool outputs.
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
+    # Internal trace of tool calls for debugging/inspection.
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 class TransactionPattern(BaseModel):
+    # Short title naming a discovered pattern.
     title: str
+    # Evidence text that should be grounded in computed data.
     evidence: str
+    # Optional examples (merchant names, IDs, etc.) supporting the pattern.
     examples: list[str] = Field(default_factory=list)
 
 
 class TransactionalDescription(BaseModel):
+    # High-level narrative summary of the batch.
     summary: str
+    # Structured list of key patterns.
     key_patterns: list[TransactionPattern] = Field(default_factory=list)
+    # Important caveats/uncertainties from missing or sparse data.
     caveats: list[str] = Field(default_factory=list)
+    # Self-reported confidence constrained to [0.0, 1.0].
     confidence: float = Field(ge=0.0, le=1.0)
 
 
@@ -71,6 +86,9 @@ Rules:
 
 
 _SUBPROCESS_RUNNER = r"""
+# This script executes inside a separate Python process and receives two inputs:
+# 1) DATA_PATH as argv[1]
+# 2) JSON payload via stdin containing user code and output limits.
 import ast
 import contextlib
 import datetime as _dt
@@ -175,25 +193,32 @@ FORBIDDEN_MODULE_NAMES = {
 
 
 def _fail(message):
+    # Return a structured rejection message instead of crashing.
     print(json.dumps({"status": "rejected", "error": message}, ensure_ascii=False))
     raise SystemExit(0)
 
 
 def _validate(tree):
+    # Walk the AST and reject risky or unsupported constructs before execution.
     for node in ast.walk(tree):
+        # Disallow imports to prevent loading filesystem/network/process modules.
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             _fail("Imports are disabled. Use the provided pd, np, and df objects.")
+        # Disallow global/nonlocal scope mutation.
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             _fail("global/nonlocal statements are disabled.")
+        # Reject dangerous names and dunder access.
         if isinstance(node, ast.Name):
             if node.id.startswith("__") or node.id in FORBIDDEN_NAMES or node.id in FORBIDDEN_MODULE_NAMES:
                 _fail(f"Use of name '{node.id}' is disabled.")
+        # Reject dangerous method/property access by attribute name.
         if isinstance(node, ast.Attribute):
             if node.attr.startswith("__") or node.attr in FORBIDDEN_ATTRS:
                 _fail(f"Use of attribute '{node.attr}' is disabled.")
 
 
 def _capture_last_expression(tree):
+    # Jupyter-like behavior: return value of last expression via _result.
     if tree.body and isinstance(tree.body[-1], ast.Expr):
         tree.body[-1] = ast.Assign(
             targets=[ast.Name(id="_result", ctx=ast.Store())],
@@ -204,6 +229,7 @@ def _capture_last_expression(tree):
 
 
 def _scalar_or_none(value):
+    # Normalize scalar values to JSON-friendly primitives.
     if value is None:
         return None
     if isinstance(value, float) and math.isnan(value):
@@ -220,9 +246,12 @@ def _scalar_or_none(value):
 
 
 def _serialize(value, depth=0):
+    ## TODO: why is it doing a compact analysis ??? 
+    # Recursively serialize pandas/numpy outputs with depth and size limits.
     if depth > 4:
         return str(value)[:1000]
     if isinstance(value, pd.DataFrame):
+        # Include a compact preview for DataFrames.
         preview = value.head(50).where(pd.notna(value), None)
         return {
             "type": "DataFrame",
@@ -231,6 +260,7 @@ def _serialize(value, depth=0):
             "records": _serialize(preview.to_dict(orient="records"), depth + 1),
         }
     if isinstance(value, pd.Series):
+        # Include a compact preview for Series.
         preview = value.head(80)
         return {
             "type": "Series",
@@ -243,8 +273,10 @@ def _serialize(value, depth=0):
     if isinstance(value, np.ndarray):
         return _serialize(value.tolist(), depth + 1)
     if isinstance(value, dict):
+        # Limit dictionary size to avoid huge payloads.
         return {str(_scalar_or_none(k)): _serialize(v, depth + 1) for k, v in list(value.items())[:120]}
     if isinstance(value, (list, tuple, set)):
+        # Limit sequence size to avoid huge payloads.
         return [_serialize(v, depth + 1) for v in list(value)[:120]]
     value = _scalar_or_none(value)
     if isinstance(value, (str, int, float, bool)) or value is None:
@@ -258,9 +290,11 @@ def _serialize(value, depth=0):
 
 
 def _trim_response(response):
+    # Ensure final JSON payload fits within max_output_chars.
     rendered = json.dumps(response, ensure_ascii=False, default=str)
     if len(rendered) <= max_output_chars:
         return rendered
+    # Fall back to a compact truncated response.
     compact = {
         "status": response.get("status"),
         "truncated": True,
@@ -271,15 +305,19 @@ def _trim_response(response):
 
 
 try:
+    # Parse and validate user code before executing.
     tree = ast.parse(code, mode="exec")
     _validate(tree)
+    # Capture last expression so results behave like notebook output.
     tree = _capture_last_expression(tree)
     compiled = compile(tree, "<transaction_agent_code>", "exec")
 
+    # Load dataframe from the prepared JSONL file.
     df = pd.read_json(DATA_PATH, lines=True)
     pd.set_option("display.max_columns", 100)
     pd.set_option("display.width", 160)
 
+    # Whitelisted builtins for safer execution.
     safe_builtins = {
         "abs": abs,
         "all": all,
@@ -311,26 +349,31 @@ try:
         "pd": pd,
     }
 
+    # Capture prints and execute code inside isolated namespace.
     stdout = io.StringIO()
     with contextlib.redirect_stdout(stdout):
         exec(compiled, namespace, namespace)
 
+    # Return both captured stdout and the serialized final expression.
     response = {
         "status": "ok",
         "stdout": stdout.getvalue(),
         "result": _serialize(namespace.get("_result")),
     }
 except Exception:
+    # Return traceback details in structured form for iterative fixes.
     response = {
         "status": "error",
         "error": traceback.format_exc(limit=6),
     }
 
+# Always print a JSON payload for the parent process to consume.
 print(_trim_response(response))
 """
 
 
 def _require_agents() -> None:
+    # Enforce SDK availability only when agent build/run is requested.
     if Agent is None or Runner is None or function_tool is None:
         raise ImportError(
             "The OpenAI Agents SDK is not installed in this environment. "
@@ -339,6 +382,7 @@ def _require_agents() -> None:
 
 
 def _context_from_wrapper(ctx: Any) -> TransactionContext:
+    # Tool runtimes may pass either context directly or wrapped in .context.
     context = getattr(ctx, "context", ctx)
     if not isinstance(context, TransactionContext):
         raise TypeError("Transaction tools require a TransactionContext.")
@@ -346,6 +390,7 @@ def _context_from_wrapper(ctx: Any) -> TransactionContext:
 
 
 def _truncate_text(value: str, max_chars: int) -> str:
+    # Utility to bound long stdout/stderr payloads.
     if len(value) <= max_chars:
         return value
     return value[:max_chars] + "\n...[truncated]"
@@ -363,15 +408,19 @@ def prepare_transaction_context(
 ) -> TransactionContext:
     """Persist the selected transaction columns as JSONL and return tool context."""
 
+    # Validate the caller requested columns that actually exist.
     missing = [column for column in columns if column not in df.columns]
     if missing:
         raise ValueError(f"Missing required transaction columns: {missing}")
 
+    # Build destination path under the provided directory or system temp.
     data_root = Path(data_dir) if data_dir is not None else Path(tempfile.gettempdir())
     data_root.mkdir(parents=True, exist_ok=True)
+    # Sanitize sample_name so it becomes filesystem-safe.
     safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in sample_name)
     data_path = data_root / f"{safe_name}_{uuid.uuid4().hex}.jsonl"
 
+    # Export only selected columns to minimize data exposed to tools.
     export_df = df.loc[:, columns].copy()
     export_df.to_json(
         data_path,
@@ -381,6 +430,7 @@ def prepare_transaction_context(
         force_ascii=False,
     )
 
+    # Return runtime context consumed by the tools and Runner.
     return TransactionContext(
         data_path=str(data_path),
         columns=list(columns),
@@ -393,12 +443,17 @@ def prepare_transaction_context(
 def get_transaction_schema(ctx: RunContextWrapper[TransactionContext]) -> str:
     """Return schema, row count, null rates, and available transaction columns."""
 
+    # Local import keeps module load lightweight and avoids hard dependency at import time.
     import pandas as pd
 
+    # Resolve and validate runtime context.
     context = _context_from_wrapper(ctx)
+    # Read the exported JSONL data prepared for this agent run.
     df = pd.read_json(context.data_path, lines=True)
+    # Record tool usage for diagnostics.
     context.tool_calls.append({"tool": "get_transaction_schema"})
 
+    # Build per-column type/null/sample summaries.
     column_summaries = []
     for column in df.columns:
         series = df[column]
@@ -413,6 +468,7 @@ def get_transaction_schema(ctx: RunContextWrapper[TransactionContext]) -> str:
             }
         )
 
+    # Compute min/max ranges for known timestamp fields when present.
     date_ranges = {}
     for column in ["cb_timestamp", "trx_timestamp_mx"]:
         if column in df.columns:
@@ -423,6 +479,7 @@ def get_transaction_schema(ctx: RunContextWrapper[TransactionContext]) -> str:
                     "max": parsed.max().isoformat(),
                 }
 
+    # Compute amount summary for amount_pos when present and numeric.
     amount_summary = None
     if "amount_pos" in df.columns:
         amounts = pd.to_numeric(df["amount_pos"], errors="coerce")
@@ -436,6 +493,7 @@ def get_transaction_schema(ctx: RunContextWrapper[TransactionContext]) -> str:
                 "max": round(float(amounts.max()), 2),
             }
 
+    # Return a single JSON string to the agent.
     response = {
         "row_count": int(len(df)),
         "column_count": int(len(df.columns)),
@@ -450,9 +508,11 @@ def get_transaction_schema(ctx: RunContextWrapper[TransactionContext]) -> str:
 def run_transaction_python(ctx: RunContextWrapper[TransactionContext], code: str) -> str:
     """Run Pandas analysis code against df and return stdout/result preview."""
 
+    # Resolve context and trace the incoming code call.
     context = _context_from_wrapper(ctx)
     context.tool_calls.append({"tool": "run_transaction_python", "code": code})
 
+    # Normalize code indentation and package execution settings.
     payload = json.dumps(
         {
             "code": textwrap.dedent(code).strip(),
@@ -462,6 +522,7 @@ def run_transaction_python(ctx: RunContextWrapper[TransactionContext], code: str
     )
 
     try:
+        # Execute sandbox runner in a child process with strict timeout.
         completed = subprocess.run(
             [context.python_executable, "-c", _SUBPROCESS_RUNNER, context.data_path],
             input=payload,
@@ -471,6 +532,7 @@ def run_transaction_python(ctx: RunContextWrapper[TransactionContext], code: str
             check=False,
         )
     except subprocess.TimeoutExpired:
+        # Return structured timeout message instead of raising.
         return json.dumps(
             {
                 "status": "timeout",
@@ -480,6 +542,7 @@ def run_transaction_python(ctx: RunContextWrapper[TransactionContext], code: str
         )
 
     if completed.returncode != 0:
+        # Surface subprocess-level failures (runner crash, interpreter errors, etc.).
         return json.dumps(
             {
                 "status": "subprocess_error",
@@ -490,6 +553,7 @@ def run_transaction_python(ctx: RunContextWrapper[TransactionContext], code: str
             ensure_ascii=False,
         )
 
+    # Normal path: return the runner's JSON payload, with hard size cap.
     return _truncate_text(completed.stdout.strip(), context.max_output_chars)
 
 
@@ -500,19 +564,24 @@ def build_transaction_analyst_agent(
 ) -> Any:
     """Build the transaction analyst agent with local Python analysis tools."""
 
+    # Fail fast if Agents SDK is unavailable.
     _require_agents()
+    # Expose local functions as callable agent tools.
     tools = [
         function_tool(get_transaction_schema),
         function_tool(run_transaction_python),
     ]
+    # Base agent configuration with structured output contract.
     kwargs: dict[str, Any] = {
         "name": "Transaction Pattern Analyst",
         "instructions": instructions,
         "tools": tools,
         "output_type": TransactionalDescription,
     }
+    # Optional model override for caller-controlled routing.
     if model is not None:
         kwargs["model"] = model
+    # Instantiate and return the configured agent.
     return Agent(**kwargs)
 
 
@@ -527,9 +596,13 @@ async def describe_transactions(
 ) -> Any:
     """Convenience helper for notebooks: prepare context, build agent, and run it."""
 
+    # Ensure SDK exists before orchestration.
     _require_agents()
+    # Serialize selected dataframe columns and create tool context.
     context = prepare_transaction_context(df, columns, **context_kwargs)
+    # Build the analyst with default or overridden model.
     agent = build_transaction_analyst_agent(model=model)
+    # Run the agent with context and turn limit, returning Runner result.
     return await Runner.run(
         agent,
         analyst_request,
