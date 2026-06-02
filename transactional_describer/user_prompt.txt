@@ -1,0 +1,53 @@
+The transactional dataframe you will receive contains the following columns and information:
+- cb_timestamp: Chargeback timestamp. Chargebacks are user reported transactions that the client does not recognize. The presence of a timestamp indicates that a user reported that transaction in mexico city time.  
+- user_id: ID for customer.
+- klrid: Card ID used for the transaction.
+- transaction_id: alphanumeric transaction ID. 
+- trx_timestamp_mx: Transaction timestamp in Mexico city time. 
+- amount_pos: Transaction amount (charges are positive)
+- operador: Merchant name of the transaction.
+- mcc_code: Merchant category code of transaction.
+- card_type: Type of card which can be physical or virtual. 
+- product_type: Type of product which can include
+    - CREDIT_BIN_5401(principal)
+    - PLATINUM (premium card)
+    - CREDIT_BIN_5456 (older version of bin 5401)
+    - BUSINESS_NEW_BIN (newer)
+    - UBER_BIN (newer)
+- nombrearchivo: All the physical cards belong to a embozo file.
+    The file assigned to the corresponding cards indicate that the date included in the file name is the date of creation for this group of cards. 
+    The file name is composed in the following manner: 
+        - Par + Date (YY-MM-dd) + Prod + JSP + Version + _ + SubEm + File_Number of the day + .emb
+        - Example: par250125ProdJSP02_SubEm0004.emb
+
+- embozo_file_date: the 
+- pos_entry_mode': Indicates the entry mode of the transaction and can be the following:
+    - Unknown: Entry method not provided or not recognized by the processor/source system.
+    - CNP Manual: Card-not-present, manually keyed transaction (PAN entered by hand). Common in phone/mail/manual entry flows.
+    - Integrated Circuit Read: Chip read (EMV contact chip, card inserted).
+    - Contactless: Contactless read (tap), usually NFC EMV contactless.
+    - CNP Card On File: Card-not-present transaction using stored credentials (merchant token/card-on-file setup).
+    - Fallback: Fallback path, typically when chip/contactless could not be used and terminal fell back to another method (often magstripe/manual). Higher risk signal in many fraud contexts.
+    - Magnetic stripe read: Card read via magstripe swipe.
+
+
+- **cvv_ind** (Card Verificatio Value) -- Indicates where the card's cvv was present or not.
+    - has_cvv: cvv present
+    - no_cvv: cvv not present
+    - unknown: unknown if cvv was present
+- metodo_identificacion: 
+- three_ds_flow: Indicates the 3DS authentication flow type and can be the following:
+    - NO_3DS: No 3DS data/token was found for the transaction.
+    - FRICTIONLESS: 3DS completed without step-up challenge (passive or low-friction authentication).
+    - CHALLENGE: 3DS required an active customer challenge (for example OTP/biometric/app confirmation).
+    - EXEMPT_OR_INFO: Transaction was exempted from challenge or processed as informational/non-authenticated 3DS signaling.
+    - UNKNOWN: 3DS data exists, but the indicator does not match a known mapped flow.
+- **afiliacion** (Afiliation) -- Merchant's affiliation
+- **adquirente** (Adquirer) -- Merchant's acquirer
+- **country** Corresponding country code. Last two characters from the operators code.
+- **cod_respuesta** -- Response code definitions
+    - 00: Authorized transaction, passed all necessary validations to be authorized.
+    - 14: Invalid card number
+    - 51: Insufficient funds
+    - 87: CVV incorrect or cvv2 is missing and pan expiration doesn't match database
+    - 08: Frozen or restricted card. Possible statuses (FROZEN-user generated-, EXPIRED, BROKEN, LOST, STOLEN, FROZEN PERMANENT, DEACTIVATED)

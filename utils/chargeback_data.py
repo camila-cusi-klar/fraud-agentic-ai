@@ -237,6 +237,8 @@ def transform_cb_df(cb_df: pd.DataFrame, copy: bool = True) -> pd.DataFrame:
     cb_df["cb_reason"] = cb_df["cb_reason"].map(CB_REASON_MAP)
     cb_df["country"] = cb_df["operador"].str[-2:]
     cb_df["amount_pos"] = cb_df["amount"]*-1
+    date_token = cb_df["nombrearchivo"].str.extract(r"par(\d{6})", expand=False)
+    cb_df["embozo_file_date"] = pd.to_datetime(date_token, format="%y%m%d", errors="coerce")
     return cb_df
 
 
