@@ -5,7 +5,7 @@ Fraud Investiagation questions:
 - Who are the top merchants of the time period asked to analyze?
     - Amount: groupby('timeframe_col', 'operador').amount_pos.sum()
     - Number of transactions: groupby('timeframe_col', 'operador').transaction_id.nunique()
-    - Number of Cards: groupby('timeframe_col', 'operador').transaction_id.nunique()
+    - Number of Cards: groupby('timeframe_col', 'operador').klrid.nunique()
 - Are there repeated groups of merchants between users or cards or card types or product types?
 - Analyze behavior between distinct time periods so if the analysis is daily/weekly find the porcentual difference between amount, number of transactions, and cards.
 - Which pairs or triplets of merchants apears the most between users? Which have the most amount between them?
@@ -68,7 +68,7 @@ The transactional dataframe contains the following columns:
 - trx_timestamp_mx: Transaction timestamp in Mexico City time.
 - amount_pos: Transaction amount (charges are positive).
 - operador: Merchant name.
-- mcc_code: Merchant category code. ##TODO: add mcc codes add mcc code. 
+- mcc_code: Merchant category code.
 - card_type: Card modality (physical or virtual).
 - product_type: Product family, including:
     - CREDIT_BIN_5401 (principal)
@@ -76,7 +76,6 @@ The transactional dataframe contains the following columns:
     - CREDIT_BIN_5456 (older 5401 version)
     - BUSINESS_NEW_BIN (newer)
     - UBER_BIN (newer)
-    - #TODO: REVISE 
 - nombrearchivo: Embossing batch file name for physical cards. It identifies the production file used to create a group of cards.
     - Expected structure: par + YYMMDD + Prod + JSP + Version + _ + SubEm + daily_file_number + .emb
     - Example: par250125ProdJSP02_SubEm0004.emb
@@ -90,6 +89,7 @@ The transactional dataframe contains the following columns:
     - CNP Card On File: Card-not-present using stored credentials.
     - Fallback: Chip/contactless failed and another method was used; often higher risk.
     - Magnetic stripe read: Magstripe swipe.
+- online: 0 card present, 1 card not present online purchase
 - cvv_ind: CVV presence indicator.
     - has_cvv: CVV present
     - no_cvv: CVV not present
